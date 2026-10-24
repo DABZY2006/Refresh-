@@ -309,7 +309,7 @@ export const createGhidraProviderClient = (input: {
   const targetLimitations = [
     ...(target.format === "mach-o-universal"
       ? [
-          `Ghidra imported only the ${target.architecture} slice of this universal Mach-O, copied from container offset ${target.universalSlice.offset} (${target.universalSlice.size} bytes). Ghidra file offsets are relative to that slice; add ${target.universalSlice.offset} for the universal file offset.`,
+          `Ghidra imported only the ${target.architecture} slice of this universal Mach-O, copied from container offset ${target.universalSlice.offset} (${target.universalSlice.size} bytes). File offsets in results and file-offset selectors are universal-file offsets; native load-image mappings stay relative to the imported slice source file.`,
         ]
       : []),
     ...(target.format === "dos-mz"

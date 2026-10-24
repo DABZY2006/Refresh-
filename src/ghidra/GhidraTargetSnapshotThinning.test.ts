@@ -113,6 +113,9 @@ describe("Ghidra universal Mach-O import thinning", () => {
       expect(parseExecutableHeader(bytes, host).ok).toBe(true);
       expect(session.targetSha256).toBe(sha256(slice));
       expect(session.targetSha256).not.toBe(target.sha256);
+      // The bridge maps its slice-local offsets to universal-file offsets.
+      expect(session.targetFileOffsetBase).toBe(target.universalSlice.offset);
+      expect(session.targetFileOffsetBase).toBeGreaterThan(0);
       await expect(access(session.targetPath)).rejects.toMatchObject({
         code: "ENOENT",
       });

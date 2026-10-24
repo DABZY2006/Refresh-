@@ -897,6 +897,10 @@ export class GhidraClient {
           // Ghidra digests the imported bytes, which are the thinned slice
           // for a universal Mach-O; Evidence keeps the admitted container.
           targetSha256: this.#importedSha256 ?? this.#options.targetSha256,
+          // The bridge reports and accepts universal-file offsets for the slice.
+          ...(this.#options.universalSlice === undefined
+            ? {}
+            : { targetFileOffsetBase: this.#options.universalSlice.offset }),
           providerVersion: this.#options.providerVersion,
           profileDigest: this.#options.profileDigest,
         },
