@@ -1,7 +1,10 @@
 import { Cli } from "incur";
 import { z } from "zod";
 
-import { captureBrowserScenario } from "./application/BrowserScenarioCaptureService.js";
+import {
+  captureBrowserScenario,
+  planBrowserScenario,
+} from "./application/BrowserScenarioCaptureService.js";
 import { withCommandCancellation } from "./cli/commandCancellation.js";
 import { CLI_COMMANDS } from "./cliCommandNames.js";
 import { parseCliJsonInput, resolveCliJsonPaths } from "./cliJsonInput.js";
@@ -38,9 +41,20 @@ export const registerBrowserScenarioCommands = (
         .string()
         .describe("Inline browser scenario JSON or JSON file path"),
     }),
-    run: ({ args }) =>
+    options: z.object({
+      dryRun: z
+        .boolean()
+        .default(false)
+        .describe(
+          "Validate the scenario and its secret environment variables, then stop before discovering, launching or attaching to a browser",
+        ),
+    }),
+    run: ({ args, options: { dryRun } }) =>
       withCommandCancellation((signal) =>
         logCliCommand(logger, CLI_COMMANDS.captureBrowserScenario, async () => {
+          const failure = dryRun
+            ? "Browser scenario validation failed"
+            : "Browser scenario capture failed";
           const input = await parseCliJsonInput(
             args.inputJson,
             OPERATION,
@@ -58,7 +72,12 @@ export const registerBrowserScenarioCommands = (
                 input.value,
                 { cause: scenario.error },
               ),
+              failure,
             );
+          if (dryRun) {
+            const plan = planBrowserScenario(scenario.data, environment);
+            return plan.ok ? plan.value : cliError(plan.error, failure);
+          }
           // Load Playwright only for this command, not during CLI startup.
           const provider =
             options.createProvider === undefined
@@ -74,7 +93,7 @@ export const registerBrowserScenarioCommands = (
             result = await captureBrowserScenario(provider, scenario.data, {
               signal,
             });
-            return result.ok ? result.value : cliError(result.error);
+            return result.ok ? result.value : cliError(result.error, failure);
           } finally {
             try {
               await provider?.close?.();
@@ -96,7 +115,8 @@ export const registerBrowserScenarioCommands = (
 
 const cliError = (
   error: Parameters<typeof projectAnalysisError>[0],
+  label: string,
 ): JsonValue => ({
-  error: "Browser scenario capture failed",
+  error: label,
   ...projectAnalysisError(error),
 });

@@ -2,7 +2,10 @@ import { AnalysisInputError } from "../domain/analysisErrorCore.js";
 import { err, ok, type Result } from "../domain/result.js";
 import { createHash } from "node:crypto";
 
-import type { BrowserScenario } from "../domain/browserScenario.js";
+import {
+  browserScenarioSecretAvailability,
+  type BrowserScenario,
+} from "../domain/browserScenario.js";
 import type {
   BrowserScenarioUrl,
   BrowserScenarioValue,
@@ -287,34 +290,14 @@ export class BrowserScenarioSecrets {
     scenario: BrowserScenario,
     environment: Readonly<Record<string, string | undefined>>,
   ): Result<BrowserScenarioSecrets, AnalysisInputError> {
+    const available = browserScenarioSecretAvailability(scenario, environment);
+    if (!available.ok) return err(available.error);
     const values = new Map<string, string>();
-    for (const [index, declaration] of scenario.secrets.entries()) {
-      const value = environment[declaration.environment_variable];
-      if (
-        !Object.hasOwn(environment, declaration.environment_variable) ||
-        typeof value !== "string"
-      )
-        return err(
-          new AnalysisInputError(
-            "capture_browser_scenario",
-            {
-              userMessage: `Set environment variable ${declaration.environment_variable} for browser scenario secret ${declaration.secret_id} in the environment that starts REA, then retry.`,
-            },
-            [
-              {
-                path: ["secrets", index, "environment_variable"],
-                reason: "missing_argument",
-                message: `Environment variable ${declaration.environment_variable} is not set for declared secret ${declaration.secret_id}.`,
-                expected: {
-                  secret_id: declaration.secret_id,
-                  environment_variable: declaration.environment_variable,
-                },
-              },
-            ],
-          ),
-        );
-      values.set(declaration.secret_id, value);
-    }
+    for (const declaration of scenario.secrets)
+      values.set(
+        declaration.secret_id,
+        environment[declaration.environment_variable]!,
+      );
     return ok(new BrowserScenarioSecrets(values));
   }
 

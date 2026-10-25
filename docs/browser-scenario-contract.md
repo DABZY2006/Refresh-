@@ -79,6 +79,50 @@ profile for this request; it does not start your fixture server or install a
 browser. A schema-valid scenario does not prove that the executable or target
 is available on the host.
 
+### Validate without a browser
+
+Add `--dry-run` to check a scenario before it launches or changes anything:
+
+```bash
+rea capture-browser-scenario ./browser-scenario.json --dry-run --json
+```
+
+The dry run reads the same JSON argument and resolves the same paths as a
+capture, then applies the same schema and semantic rules: duplicate or reserved
+step IDs, duplicate secret IDs or variables, and undeclared secret references.
+It also requires each declared secret's environment variable to be set, which
+is the rule a capture applies before acquiring a browser. Errors are the same
+`invalid_request` projection with field paths, under
+`"error": "Browser scenario validation failed"`. A valid scenario exits 0
+with a compact plan and creates no provider, profile, file or connection:
+
+```json
+{
+  "operation": "capture_browser_scenario",
+  "dry_run": true,
+  "browser_mode": "launch",
+  "start_origin": "http://127.0.0.1:3000",
+  "steps": [
+    { "step_id": "scenario_start", "action": "goto_start" },
+    { "step_id": "settle", "action": "wait_for_timeout" }
+  ],
+  "secrets": [],
+  "not_checked": [
+    "browser executable, CDP endpoint and target discovery",
+    "browser launch or attachment",
+    "navigation, network reachability and page state",
+    "locator resolution, action outcomes and capture limits"
+  ]
+}
+```
+
+Steps are listed in capture order, including the initial navigation. Secrets
+report only `environment_value: "present"`; values are never read into the
+plan or printed. `not_checked` names the stages a dry run cannot establish, so
+a valid plan is not a prediction that the capture will succeed. The dry run is
+CLI-only. Over MCP, `capture_browser_scenario` already rejects invalid input
+before acquiring a browser.
+
 ## Interaction example: capture the visible result
 
 The default final URL answers "where did the page end up?", not "what did the

@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+import { AnalysisInputError } from "./analysisErrorCore.js";
+import { err, ok, type Result } from "./result.js";
+
 import { webRuntimeCommandTimeoutSchema } from "./browserDeadline.js";
 import {
   browserScenarioActionSchema,
@@ -209,3 +212,38 @@ export const browserScenarioSchema = browserScenarioInputSchema.superRefine(
   validateBrowserScenario,
 );
 export type BrowserScenario = z.infer<typeof browserScenarioSchema>;
+
+/**
+ * Refuse a declared secret whose environment variable is absent. Execution and
+ * dry runs share this rule. It checks presence only and never reads a value.
+ */
+export const browserScenarioSecretAvailability = (
+  scenario: BrowserScenario,
+  environment: Readonly<Record<string, string | undefined>>,
+): Result<void, AnalysisInputError> => {
+  for (const [index, declaration] of scenario.secrets.entries())
+    if (
+      !Object.hasOwn(environment, declaration.environment_variable) ||
+      typeof environment[declaration.environment_variable] !== "string"
+    )
+      return err(
+        new AnalysisInputError(
+          "capture_browser_scenario",
+          {
+            userMessage: `Set environment variable ${declaration.environment_variable} for browser scenario secret ${declaration.secret_id} in the environment that starts REA, then retry.`,
+          },
+          [
+            {
+              path: ["secrets", index, "environment_variable"],
+              reason: "missing_argument",
+              message: `Environment variable ${declaration.environment_variable} is not set for declared secret ${declaration.secret_id}.`,
+              expected: {
+                secret_id: declaration.secret_id,
+                environment_variable: declaration.environment_variable,
+              },
+            },
+          ],
+        ),
+      );
+  return ok(undefined);
+};
