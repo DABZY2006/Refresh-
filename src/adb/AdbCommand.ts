@@ -212,9 +212,11 @@ export const runAdbCapture = async (
       );
     return err(
       new AdbProtocolError(
-        excerpt === ""
-          ? `adb exited with code ${String(failure.code)} for ${operation}`
-          : excerpt,
+        failure.spawnFailed === true
+          ? `adb could not be started (${String(failure.code)}) for ${operation}`
+          : excerpt === ""
+            ? `adb exited with code ${String(failure.code)} for ${operation}`
+            : excerpt,
         failure,
         cause,
       ),

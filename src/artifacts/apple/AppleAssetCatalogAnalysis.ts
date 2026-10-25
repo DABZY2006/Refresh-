@@ -439,7 +439,8 @@ const assetUtilFailure = (
   };
   if (code === "ETIMEDOUT")
     return new AnalysisTimeoutError("inspect_asset_catalog", 60_000, options);
-  if (code === "ENOENT")
+  // assetutil never started, for example missing (ENOENT) or not permitted.
+  if (output?.spawnFailed === true)
     return new AnalysisCapabilityUnavailableError(
       "artifact",
       "inspect_asset_catalog",

@@ -1,5 +1,6 @@
 import type { AnalysisCapturedOutput } from "../domain/analysisErrorBase.js";
 import {
+  type ChildProcess,
   execFile,
   type ExecFileOptionsWithBufferEncoding,
 } from "node:child_process";
@@ -84,6 +85,8 @@ export interface ExecFileOutputFailure {
   readonly stdoutBytes?: number;
   readonly stderrBytes?: number;
   readonly collectionFailure?: boolean;
+  /** The process never started; `code` is the spawn errno, not an exit. */
+  readonly spawnFailed?: true;
 }
 
 /** Read captured output metadata from a failed execFileOutput invocation. */
@@ -100,6 +103,7 @@ export const execFileOutputFailure = (
   const stdoutBytes = Reflect.get(cause, "stdoutBytes");
   const stderrBytes = Reflect.get(cause, "stderrBytes");
   const collectionFailure = Reflect.get(cause, "collectionFailure");
+  const spawnFailed = Reflect.get(cause, "spawnFailed");
   if (typeof stdout !== "string" || typeof stderr !== "string")
     return undefined;
   return {
@@ -121,6 +125,7 @@ export const execFileOutputFailure = (
     outputTruncated:
       outputTruncated === true || code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
     ...(collectionFailure === true ? { collectionFailure: true } : {}),
+    ...(spawnFailed === true ? { spawnFailed: true } : {}),
   };
 };
 
@@ -140,6 +145,32 @@ export const execFileFailureCapturedOutput = (
   signal: failure.signal,
   truncated: failure.outputTruncated,
 });
+
+/**
+ * Mark an errno failure from starting the process, which Node reports as
+ * `syscall: "spawn"` when thrown synchronously and `spawn <path>` when
+ * emitted. The synchronous shape gains the `path` and `spawnargs` the
+ * emitted one carries. Argument validation errors carry no errno.
+ */
+const admitSpawnFailure = (
+  error: Error,
+  command: string,
+  arguments_: readonly string[],
+): boolean => {
+  const syscall = Reflect.get(error, "syscall");
+  if (
+    typeof Reflect.get(error, "errno") !== "number" ||
+    typeof syscall !== "string" ||
+    !(syscall === "spawn" || syscall.startsWith("spawn "))
+  )
+    return false;
+  Reflect.set(error, "spawnFailed", true);
+  if (typeof Reflect.get(error, "path") !== "string")
+    Reflect.set(error, "path", command);
+  if (!Array.isArray(Reflect.get(error, "spawnargs")))
+    Reflect.set(error, "spawnargs", [...arguments_]);
+  return true;
+};
 
 /** Run a shell-free command while capturing its complete output bytes. */
 export const execFileBytes = (
@@ -161,46 +192,66 @@ export const execFileBytes = (
     let stopped: "abort" | "timeout" | undefined;
     let deadline: NodeJS.Timeout | undefined;
     let grace: NodeJS.Timeout | undefined;
-    const child = execFile(
-      command,
-      [...arguments_],
-      {
-        ...execOptions,
-        // A stoppable command's abort and timeout are handled below, because
-        // execFile neither waits for the exit on abort nor kills a process
-        // that ignores its timeout signal.
-        ...(stopSignal === undefined
-          ? {
-              ...(signal === undefined ? {} : { signal }),
-              ...(timeout === undefined ? {} : { timeout }),
-            }
-          : { killSignal: stopSignal }),
-        encoding: "buffer",
-        maxBuffer: options.maxBuffer ?? Number.POSITIVE_INFINITY,
-      },
-      (error, stdout, stderr) => {
-        signal?.removeEventListener("abort", onAbort);
-        clearTimeout(deadline);
-        clearTimeout(grace);
-        const failure =
-          stopped === "abort" && signal !== undefined
-            ? new ExecFileOutputCancelledError(signal.reason)
-            : stopped === "timeout" && timeout !== undefined
-              ? timeoutError(command, timeout, error)
-              : error?.name === "AbortError" && error.code === "ABORT_ERR"
-                ? new ExecFileOutputCancelledError(error.cause)
-                : error;
-        if (failure !== null) {
-          Reflect.set(failure, "stdout", stdout.toString("utf8"));
-          Reflect.set(failure, "stderr", stderr.toString("utf8"));
-          Reflect.set(failure, "stdoutBytes", stdout.byteLength);
-          Reflect.set(failure, "stderrBytes", stderr.byteLength);
-          reject(failure);
-          return;
-        }
-        resolve({ stdout, stderr });
-      },
-    );
+    let child: ChildProcess;
+    try {
+      child = execFile(
+        command,
+        [...arguments_],
+        {
+          ...execOptions,
+          // A stoppable command's abort and timeout are handled below, because
+          // execFile neither waits for the exit on abort nor kills a process
+          // that ignores its timeout signal.
+          ...(stopSignal === undefined
+            ? {
+                ...(signal === undefined ? {} : { signal }),
+                ...(timeout === undefined ? {} : { timeout }),
+              }
+            : { killSignal: stopSignal }),
+          encoding: "buffer",
+          maxBuffer: options.maxBuffer ?? Number.POSITIVE_INFINITY,
+        },
+        (error, stdout, stderr) => {
+          signal?.removeEventListener("abort", onAbort);
+          clearTimeout(deadline);
+          clearTimeout(grace);
+          const failure =
+            stopped === "abort" && signal !== undefined
+              ? new ExecFileOutputCancelledError(signal.reason)
+              : stopped === "timeout" && timeout !== undefined
+                ? timeoutError(command, timeout, error)
+                : error?.name === "AbortError" && error.code === "ABORT_ERR"
+                  ? new ExecFileOutputCancelledError(error.cause)
+                  : error;
+          if (failure !== null) {
+            admitSpawnFailure(failure, command, arguments_);
+            Reflect.set(failure, "stdout", stdout.toString("utf8"));
+            Reflect.set(failure, "stderr", stderr.toString("utf8"));
+            Reflect.set(failure, "stdoutBytes", stdout.byteLength);
+            Reflect.set(failure, "stderrBytes", stderr.byteLength);
+            reject(failure);
+            return;
+          }
+          resolve({ stdout, stderr });
+        },
+      );
+    } catch (error) {
+      // Node throws spawn errors other than EACCES, EAGAIN, EMFILE, ENFILE and
+      // ENOENT (for example ENOTDIR or EPERM) synchronously. No process
+      // started, so admit the same empty capture an asynchronous spawn
+      // failure carries; argument validation errors stay unadmitted.
+      if (
+        error instanceof Error &&
+        admitSpawnFailure(error, command, arguments_)
+      ) {
+        Reflect.set(error, "stdout", "");
+        Reflect.set(error, "stderr", "");
+        Reflect.set(error, "stdoutBytes", 0);
+        Reflect.set(error, "stderrBytes", 0);
+      }
+      reject(error);
+      return;
+    }
     // The first stop request names the failure; a later one is not resent.
     const stop = (reason: "abort" | "timeout"): void => {
       if (stopped !== undefined) return;

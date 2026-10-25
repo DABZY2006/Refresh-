@@ -485,6 +485,9 @@ it.each(["not json", "{}", "[null]"])(
 it.each([
   ["ETIMEDOUT", "AnalysisTimeoutError"],
   ["ENOENT", "AnalysisCapabilityUnavailableError"],
+  ["EACCES", "AnalysisCapabilityUnavailableError"],
+  ["EPERM", "AnalysisCapabilityUnavailableError"],
+  ["ENOTDIR", "AnalysisCapabilityUnavailableError"],
   ["ERR_CHILD_PROCESS_STDIO_MAXBUFFER", "AnalysisResourceConstraintError"],
   [1, "AnalysisOutputError"],
 ] as const)(
@@ -497,6 +500,12 @@ it.each([
       stdout: "",
       stderr: "specific catalog diagnostic",
       signal: code === "ETIMEDOUT" ? "SIGTERM" : null,
+      // execFileOutput marks a command that never started.
+      ...((["ENOENT", "EACCES", "EPERM", "ENOTDIR"] as const).some(
+        (spawnCode) => spawnCode === code,
+      )
+        ? { spawnFailed: true }
+        : {}),
     });
     await expect(
       analyzeAppleAssetCatalogs({
