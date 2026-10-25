@@ -84,7 +84,7 @@ const untypedUnionItems = (schema: unknown, path = "$"): readonly string[] => {
     return [];
   const node = schema as Record<string, unknown>;
   const items = node.items;
-  const here =
+  const untypedUnion =
     node.type === "array" &&
     typeof items === "object" &&
     items !== null &&
@@ -94,6 +94,14 @@ const untypedUnionItems = (schema: unknown, path = "$"): readonly string[] => {
     (items as Record<string, unknown>).type === undefined
       ? [`${path}.items`]
       : [];
+  const multiTypeArrayWithItems =
+    Array.isArray(node.type) &&
+    node.type.length > 1 &&
+    node.type.includes("array") &&
+    node.items !== undefined
+      ? [`${path}.items`]
+      : [];
+  const here = [...untypedUnion, ...multiTypeArrayWithItems];
   return [
     ...here,
     ...Object.entries(node).flatMap(([key, value]) => {

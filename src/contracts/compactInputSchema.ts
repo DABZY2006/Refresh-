@@ -139,6 +139,25 @@ const stripChildAnnotations = (child: unknown): unknown => {
   return kept;
 };
 
+const serializedChildPosition = (
+  position: "schema" | "map" | "data",
+  key: string,
+  child: unknown,
+): "schema" | "map" | "data" =>
+  position === "map"
+    ? "schema"
+    : position === "schema" && schemaMaps.has(key)
+      ? "map"
+      : position === "schema" &&
+          key === "not" &&
+          isSchemaObject(child) &&
+          Object.keys(child).length === 0
+        ? "data"
+        : position === "schema" &&
+            (schemaArrays.has(key) || schemaChildren.has(key))
+          ? "schema"
+          : "data";
+
 /** Stop serialization at the budget before allocating an expanded schema. */
 const inlineWithinBudget = (
   root: Record<string, unknown>,
@@ -240,16 +259,12 @@ const inlineWithinBudget = (
         if (!first) yield ",";
         first = false;
         yield JSON.stringify(key) + ":";
-        const childPosition =
-          position === "map"
-            ? "schema"
-            : position === "schema" && schemaMaps.has(key)
-              ? "map"
-              : position === "schema" &&
-                  (schemaArrays.has(key) || schemaChildren.has(key))
-                ? "schema"
-                : "data";
-        yield* serialize(child, childPosition, currentScope, active);
+        yield* serialize(
+          child,
+          serializedChildPosition(position, key, child),
+          currentScope,
+          active,
+        );
       }
       yield "}";
     } else {
@@ -321,6 +336,51 @@ const detectedTypes = (
   );
   if (types.some((type) => type === undefined)) return undefined;
   return [...new Set(types.flatMap((type) => type ?? []))];
+};
+
+/** Preserve non-array element types when reducing an array property. */
+const reducedArrayItems = (
+  schema: unknown,
+  references: JsonSchemaReferences,
+  inherited: JsonSchemaScope | undefined,
+  active: ReadonlySet<object> = new Set(),
+): Record<string, unknown> => {
+  const itemTypes = (
+    node: unknown,
+    parent: JsonSchemaScope | undefined,
+    seen: ReadonlySet<object>,
+  ): readonly string[] | undefined => {
+    if (!isSchemaObject(node)) return undefined;
+    const scope = references.enter(node, parent);
+    if (scope === undefined) return undefined;
+    if (typeof node.$ref === "string") {
+      if (seen.has(node)) return undefined;
+      const target = references.resolve(scope, node.$ref);
+      return target.kind === "target"
+        ? itemTypes(target.value, scope, new Set([...seen, node]))
+        : undefined;
+    }
+    if (node.items !== undefined && !Array.isArray(node.items))
+      return detectedTypes(node.items, references, scope, seen);
+    const branches = (
+      Array.isArray(node.anyOf)
+        ? node.anyOf
+        : Array.isArray(node.oneOf)
+          ? node.oneOf
+          : []
+    ).filter((branch) =>
+      detectedTypes(branch, references, scope, seen)?.includes("array"),
+    );
+    if (branches.length === 0) return undefined;
+    const types = branches.map((branch) => itemTypes(branch, scope, seen));
+    return types.some((type) => type === undefined)
+      ? undefined
+      : [...new Set(types.flatMap((type) => type ?? []))];
+  };
+  const types = itemTypes(schema, inherited, active);
+  return types === undefined || types.length === 0 || types.includes("array")
+    ? jsonValueSchema()
+    : { type: types.length === 1 ? types[0] : types };
 };
 
 /** Give homogeneous array-item unions the type required by strict gateways. */
@@ -453,7 +513,15 @@ const reduceToShallowProperties = (
           ...(type === undefined ? {} : { type }),
           // Reduced inputs intentionally omit nested validation, but clients
           // still require an item schema to accept an array declaration.
-          ...(types?.includes("array") ? { items: jsonValueSchema() } : {}),
+          ...(types?.includes("array")
+            ? {
+                items: reducedArrayItems(
+                  value,
+                  references,
+                  references.rootScope,
+                ),
+              }
+            : {}),
           ...description,
         },
       ];

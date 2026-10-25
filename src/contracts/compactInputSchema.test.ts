@@ -395,11 +395,16 @@ describe("compact input schema budget and reduction", () => {
           type: "array",
           items: structuredClone(repeatedObservation),
         },
+        unconstrained: {
+          type: "array",
+          items: {},
+        },
         nullable: { anyOf: [{ type: "string" }, { type: "null" }] },
       },
       properties: {
         capture: { $ref: "#/$defs/pair", description: "Complete capture." },
         observations: { $ref: "#/$defs/observations" },
+        unconstrained: { $ref: "#/$defs/unconstrained" },
         label: { $ref: "#/$defs/nullable" },
       },
     };
@@ -411,6 +416,10 @@ describe("compact input schema budget and reduction", () => {
     expect(schema.properties).toEqual({
       capture: { type: "object", description: "Complete capture." },
       observations: {
+        type: "array",
+        items: { type: "object" },
+      },
+      unconstrained: {
         type: "array",
         items: {
           type: ["null", "boolean", "object", "array", "number", "string"],
@@ -424,10 +433,16 @@ describe("compact input schema budget and reduction", () => {
     expect(
       validate({
         capture: {},
-        observations: [[[null, true, 42, "nested"], { values: [[], [false]] }]],
+        observations: [{ values: [[], [false]] }],
+        unconstrained: [
+          [[null, true, 42, "nested"], { values: [[], [false]] }],
+        ],
         label: null,
       }),
     ).toBe(true);
+    expect(
+      validate({ capture: {}, observations: ["not-an-object"], label: null }),
+    ).toBe(false);
     expect(validate({ capture: {}, observations: [], label: "capture" })).toBe(
       true,
     );
