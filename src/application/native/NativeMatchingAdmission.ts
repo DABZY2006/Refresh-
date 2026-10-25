@@ -1,31 +1,72 @@
 import { setImmediate } from "node:timers/promises";
 import { AnalysisResourceConstraintError } from "../../domain/analysisErrorCore.js";
-import { fixedNativeAllowance } from "../../domain/native/nativeDeadlines.js";
+import { analysisSettingLimit } from "../../domain/analysisSettingDefinitions.js";
+import {
+  DEFAULT_NATIVE_MATCHING_REPRESENTATION_BYTES,
+  MAXIMUM_NATIVE_MATCHING_REPRESENTATION_BYTES,
+} from "../../domain/analysisResourceLimits.js";
+import {
+  DEFAULT_NATIVE_MATCHING_ALLOWANCE,
+  NATIVE_MATCHING_ALLOWANCE_SETTING,
+  type NativeMatchingAllowance,
+} from "../../config/nativeMatchingAllowance.js";
 
-const NATIVE_MATCHING_REPRESENTATION_BYTES = 96 * 1024 * 1024;
+const MEBIBYTE = 1024 * 1024;
+const byteAllowance = (bytes: number): string =>
+  Number.isInteger(bytes / MEBIBYTE)
+    ? `${String(bytes / MEBIBYTE)} MiB / ${String(bytes)} bytes`
+    : `${String(bytes)} bytes`;
+
+/** User-visible recovery for the effective matching representation allowance. */
+const nativeMatchingAllowanceRecovery = (
+  allowance: NativeMatchingAllowance,
+): string =>
+  [
+    `Native function matching is limited to ${byteAllowance(allowance.maximumBytes)} of representation${allowance.source === "setting" ? ` by ${NATIVE_MATCHING_ALLOWANCE_SETTING}` : ""}.`,
+    `On MCP, call update_analysis_settings with setting native.matching_representation_bytes, action set, and a value in bytes up to ${byteAllowance(MAXIMUM_NATIVE_MATCHING_REPRESENTATION_BYTES)} (default ${byteAllowance(DEFAULT_NATIVE_MATCHING_REPRESENTATION_BYTES)}), then retry the original request. It applies to the next operation without restarting REA. For CLI or future REA processes, set ${NATIVE_MATCHING_ALLOWANCE_SETTING} in the launch environment.`,
+    "This budget is not a bound on total process RSS; raising it lets matching retain more representation in the REA process.",
+    "Splitting inventories into separate matches changes global name and body uniqueness, so it is not an equivalent workaround.",
+    "Repeating the unchanged request fails the same way.",
+  ].join(" ");
 
 /** Budget the actual selected observations, before cloning or index allocation. */
 export class NativeMatchingAdmission {
-  #remaining = NATIVE_MATCHING_REPRESENTATION_BYTES;
+  readonly #maximum: number;
+  readonly #source: NativeMatchingAllowance["source"];
+  #remaining: number;
   #work = 0;
   readonly #seen = new WeakSet<object>();
   constructor(
     readonly operation: string,
     readonly signal?: AbortSignal,
-  ) {}
+    allowance: NativeMatchingAllowance = DEFAULT_NATIVE_MATCHING_ALLOWANCE,
+  ) {
+    // Read the accepted operation's value once, so the refusal reports the
+    // budget this request actually ran under.
+    this.#maximum = allowance.maximumBytes;
+    this.#source = allowance.source;
+    this.#remaining = this.#maximum;
+  }
   readonly checkpoint = async (bytes = 0): Promise<void> => {
     this.#remaining -= bytes;
     if (this.#remaining < 0)
       throw new AnalysisResourceConstraintError(
         this.operation,
         "capacity",
-        `Native function matching exceeds its ${String(NATIVE_MATCHING_REPRESENTATION_BYTES)}-byte (96 MiB) representation allowance. This release has no runtime override.`,
-        { maximum_bytes: NATIVE_MATCHING_REPRESENTATION_BYTES },
-        fixedNativeAllowance(
-          "The native function-matching representation allowance",
-          "bytes",
-          `${String(NATIVE_MATCHING_REPRESENTATION_BYTES)} bytes`,
-        ),
+        `Native function matching exceeds its ${byteAllowance(this.#maximum)} representation allowance (native.matching_representation_bytes).`,
+        { maximum_bytes: this.#maximum },
+        {
+          retryable: false,
+          remediationAction: nativeMatchingAllowanceRecovery({
+            maximumBytes: this.#maximum,
+            source: this.#source,
+          }),
+          limit: analysisSettingLimit(
+            "native.matching_representation_bytes",
+            this.#maximum,
+            this.#source,
+          ),
+        },
       );
     this.signal?.throwIfAborted();
     if (++this.#work % 256 === 0)

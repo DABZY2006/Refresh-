@@ -14,6 +14,19 @@ export const DEFAULT_ASAR_MAX_HEADER_BYTES = 16 * 1024 * 1024;
  */
 export const MAXIMUM_ASAR_MAX_HEADER_BYTES = 256 * 1024 * 1024;
 
+/** Native function-matching representation admitted when the setting is unset. */
+export const DEFAULT_NATIVE_MATCHING_REPRESENTATION_BYTES = 96 * 1024 * 1024;
+
+/**
+ * Largest configurable matching admission. Complete matching Evidence is
+ * serialized into one canonical string for its digest, about 670 bytes per
+ * emitted member with short names. Each member is charged at least about
+ * 1.9 KiB, so 1 GiB keeps that text well below Node's single-string ceiling
+ * of about 512 Mi code units. A lower value only refuses more requests, so the
+ * setting has no floor.
+ */
+export const MAXIMUM_NATIVE_MATCHING_REPRESENTATION_BYTES = 1024 * 1024 * 1024;
+
 /** Default absolute deadline for Ghidra import, analysis, bridge, and readiness. */
 export const DEFAULT_GHIDRA_STARTUP_TIMEOUT_MS = 330_000;
 
